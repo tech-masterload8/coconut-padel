@@ -15,7 +15,7 @@ export default function HomePage() {
         <section className="grid items-start gap-10 lg:grid-cols-[1.05fr_0.95fr]">
           <div className="space-y-6">
             <p className="inline-flex rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-primary">
-              Americano · multi lapangan
+              Americano · Mexicano · multi lapangan
             </p>
             <h1 className="font-heading text-4xl leading-tight tracking-tight sm:text-6xl">
               Main dulu.

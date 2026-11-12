@@ -33,6 +33,8 @@ export type ClientSnapshot = {
     status: string;
     courtCount: number;
     pointsPerMatch: number;
+    scoring: string;
+    format: string;
     scheduleMode: string;
   };
   players: ClientPlayer[];
@@ -72,6 +74,8 @@ export function toClientSnapshot(snapshot: TournamentSnapshot): ClientSnapshot {
       status: snapshot.tournament.status,
       courtCount: snapshot.tournament.courtCount,
       pointsPerMatch: snapshot.tournament.pointsPerMatch,
+      scoring: snapshot.tournament.scoring,
+      format: snapshot.tournament.format,
       scheduleMode: snapshot.tournament.scheduleMode,
     },
     players: snapshot.players.map((player) => ({

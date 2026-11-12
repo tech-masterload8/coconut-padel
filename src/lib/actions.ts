@@ -16,7 +16,9 @@ import {
   verifyPin,
 } from "@/lib/auth";
 import {
+  generateMexicanoRound,
   generateRound,
+  parseFormat,
   previewUpcomingRounds,
   roundToActivate,
   roundsAheadOfPlay,
@@ -24,7 +26,14 @@ import {
   statusesForBatch,
   type ScheduleMode,
 } from "@/lib/matchmaker";
-import { isValidAmericanoScore, parsePointAdjustment } from "@/lib/scoring";
+import {
+  isScoreTarget,
+  isValidMatchScore,
+  parsePointAdjustment,
+  parseScoreSystem,
+  scoreRuleMessage,
+  toScoreSystem,
+} from "@/lib/scoring";
 import {
   getTournamentBySlug,
   getTournamentSnapshot,
@@ -34,7 +43,6 @@ import {
 import { toClientSnapshot, type ClientSnapshot } from "@/lib/snapshot";
 
 const nanoid = customAlphabet("abcdefghijklmnopqrstuvwxyz0123456789", 8);
-const POINTS_OPTIONS = [16, 21, 24, 32] as const;
 const SCHEDULE_MODES = ["continuous", "full"] as const;
 
 function parseScheduleMode(value: string): ScheduleMode | null {
@@ -154,6 +162,7 @@ async function savePlannedRounds(snapshot: TournamentSnapshot, alreadyPlaying: b
 async function rewriteScheduledTail(slug: string) {
   const snapshot = await getTournamentSnapshot(slug);
   if (!snapshot || snapshot.tournament.scheduleMode !== "full") return;
+  if (snapshot.tournament.format === "mexicano") return;
   const ceiling = scheduledTailCeiling(snapshot.matches);
   const removable = snapshot.matches.filter(
     (match) => match.status === "scheduled" && match.roundNumber > ceiling,
@@ -229,12 +238,41 @@ async function advanceFullSchedule(slug: string, snapshot: TournamentSnapshot): 
   return { ok: false, held: true, message: "Ronde berikutnya sudah ada di jadwal." };
 }
 
+/**
+ * Mexicano: ronde berikutnya baru disusun setelah semua skor ronde ini masuk,
+ * karena lawan ditentukan dari klasemen saat itu.
+ */
+async function advanceMexicano(slug: string, snapshot: TournamentSnapshot): Promise<FillResult> {
+  if (snapshot.matches.some((match) => match.status === "pending")) {
+    return { ok: false, held: true, message: "Ronde berikutnya menunggu semua skor ronde ini." };
+  }
+
+  const nextRound = snapshot.currentRound + 1;
+  const generated = generateMexicanoRound({
+    players: snapshot.players.map((player) => ({ id: player.id, present: player.present })),
+    courtCount: snapshot.tournament.courtCount,
+    pastMatches: pastMatchesFromSnapshot(snapshot),
+    ranks: new Map(snapshot.standings.map((row) => [row.playerId, row.rank])),
+    roundNumber: nextRound,
+  });
+  if (generated.matches.length === 0) return { ok: false, message: "Butuh minimal 4 pemain hadir." };
+
+  await persistRound(snapshot.tournament.id, nextRound, generated);
+  await markLive(snapshot);
+  return okWithSnapshot(slug, snapshot.currentRound === 0 ? "Turnamen dimulai." : `Ronde ${nextRound} dimulai.`);
+}
+
 /** Isi jadwal yang masih kurang dari 20 ronde di depan ronde yang sedang main. */
 export async function ensureUpcomingRounds(slug: string): Promise<TournamentSnapshot | null> {
   const snapshot = await getTournamentSnapshot(slug);
   if (!snapshot) return null;
   const playing = snapshot.matches.some((match) => match.status === "pending");
-  if (snapshot.tournament.scheduleMode !== "full" || snapshot.tournament.status !== "live" || !playing) {
+  if (
+    snapshot.tournament.scheduleMode !== "full" ||
+    snapshot.tournament.format === "mexicano" ||
+    snapshot.tournament.status !== "live" ||
+    !playing
+  ) {
     return snapshot;
   }
 
@@ -254,6 +292,9 @@ async function fillCourts(slug: string): Promise<FillResult> {
   if (!snapshot) return { ok: false, message: "Turnamen tidak ditemukan." };
   if (snapshot.tournament.status === "finished") {
     return { ok: false, message: "Turnamen sudah selesai." };
+  }
+  if (snapshot.tournament.format === "mexicano") {
+    return advanceMexicano(slug, snapshot);
   }
   if (snapshot.tournament.scheduleMode === "full") {
     return advanceFullSchedule(slug, snapshot);
@@ -344,7 +385,11 @@ export async function createTournament(
   const pin = String(formData.get("pin") ?? "").trim();
   const courtCount = Number(formData.get("courtCount") ?? 1);
   const pointsPerMatch = Number(formData.get("pointsPerMatch") ?? 24);
-  const scheduleMode = parseScheduleMode(String(formData.get("scheduleMode") ?? "continuous"));
+  const scoring = parseScoreSystem(String(formData.get("scoring") ?? "points"));
+  const format = parseFormat(String(formData.get("format") ?? "americano"));
+  const requestedMode = parseScheduleMode(String(formData.get("scheduleMode") ?? "continuous"));
+  // Mexicano menyusun lawan dari klasemen, jadi selalu ronde penuh.
+  const scheduleMode = format === "mexicano" ? "full" : requestedMode;
   const playerNames = formData.getAll("playerName").map((value) => String(value).trim());
   const lateFlags = formData.getAll("playerLate").map((value) => String(value) === "1");
   const pointValues = formData.getAll("playerPoints").map((value) => String(value).trim());
@@ -358,8 +403,11 @@ export async function createTournament(
   if (!Number.isInteger(courtCount) || courtCount < 1 || courtCount > 12) {
     return { ok: false as const, message: "Jumlah lapangan 1-12." };
   }
-  if (!POINTS_OPTIONS.includes(pointsPerMatch as (typeof POINTS_OPTIONS)[number])) {
-    return { ok: false as const, message: "Pilih poin yang tersedia." };
+  if (!scoring || !isScoreTarget(scoring, pointsPerMatch)) {
+    return { ok: false as const, message: "Pilih sistem poin yang tersedia." };
+  }
+  if (!format) {
+    return { ok: false as const, message: "Format turnamen tidak dikenal." };
   }
   if (!scheduleMode) {
     return { ok: false as const, message: "Mode jadwal tidak dikenal." };
@@ -390,6 +438,8 @@ export async function createTournament(
       name,
       courtCount,
       pointsPerMatch,
+      scoring,
+      format,
       scheduleMode,
       status: "setup",
       adminPinHash: hashPin(pin),
@@ -513,6 +563,9 @@ export async function updateScheduleMode(slug: string, mode: string): Promise<Ac
   const tournament = await getTournamentBySlug(slug);
   if (!tournament) return { ok: false, message: "Turnamen tidak ditemukan." };
   if (tournament.status === "finished") return { ok: false, message: "Turnamen sudah selesai." };
+  if (tournament.format === "mexicano" && scheduleMode !== "full") {
+    return { ok: false, message: "Mexicano hanya bisa dengan ronde penuh." };
+  }
 
   const db = getDb();
   await db
@@ -552,8 +605,9 @@ export async function submitScore(
   if (!(await requireAdmin(slug))) return { ok: false, message: "Masuk sebagai pengelola dulu." };
   const tournament = await getTournamentBySlug(slug);
   if (!tournament) return { ok: false, message: "Turnamen tidak ditemukan." };
-  if (!isValidAmericanoScore(teamAScore, teamBScore, tournament.pointsPerMatch)) {
-    return { ok: false, message: `Skor harus total ${tournament.pointsPerMatch}.` };
+  const scoring = toScoreSystem(tournament.scoring);
+  if (!isValidMatchScore(teamAScore, teamBScore, scoring, tournament.pointsPerMatch)) {
+    return { ok: false, message: scoreRuleMessage(scoring, tournament.pointsPerMatch) };
   }
 
   const db = getDb();

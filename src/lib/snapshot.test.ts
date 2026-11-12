@@ -9,6 +9,8 @@ describe("snapshot revision", () => {
       status: "live",
       courtCount: 2,
       pointsPerMatch: 24,
+      scoring: "points",
+      format: "americano",
       scheduleMode: "continuous",
     },
     players: [{ id: "p1", name: "Hendrik", present: true, isLate: false, pointAdjustment: 0 }],

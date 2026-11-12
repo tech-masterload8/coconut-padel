@@ -14,7 +14,7 @@ import {
   updateScheduleMode,
   type ActionResult,
 } from "@/lib/actions";
-import { parsePointAdjustment } from "@/lib/scoring";
+import { parsePointAdjustment, scoreLabel, toScoreSystem, type ScoreSystem } from "@/lib/scoring";
 import type { ClientMatch, ClientSnapshot } from "@/lib/snapshot";
 import { useLiveSnapshot } from "@/lib/use-live-snapshot";
 import { BrandHeader } from "@/components/brand-header";
@@ -112,6 +112,8 @@ export function TournamentBoard({
 
   const live = snapshot.tournament.status === "live";
   const finished = snapshot.tournament.status === "finished";
+  const scoring = toScoreSystem(snapshot.tournament.scoring);
+  const mexicano = snapshot.tournament.format === "mexicano";
 
   useEffect(() => {
     if (!notice) return;
@@ -154,7 +156,8 @@ export function TournamentBoard({
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <Badge>{statusLabel[snapshot.tournament.status] ?? snapshot.tournament.status}</Badge>
               <Badge variant="outline">{snapshot.tournament.courtCount} lapangan</Badge>
-              <Badge variant="outline">{snapshot.tournament.pointsPerMatch} poin</Badge>
+              <Badge variant="outline">{scoreLabel(scoring, snapshot.tournament.pointsPerMatch)}</Badge>
+              {mexicano ? <Badge variant="outline">Mexicano</Badge> : null}
               {snapshot.tournament.scheduleMode === "full" ? (
                 <Badge variant="outline">Ronde penuh</Badge>
               ) : null}
@@ -204,6 +207,7 @@ export function TournamentBoard({
           <AdminBar
             courtCount={snapshot.tournament.courtCount}
             scheduleMode={snapshot.tournament.scheduleMode}
+            mexicano={mexicano}
             pendingCount={pendingMatches.length}
             scheduledCount={scheduledCount}
             started={snapshot.currentRound > 0}
@@ -250,6 +254,7 @@ export function TournamentBoard({
                       <MatchCard
                         key={match.id}
                         match={match}
+                        scoring={scoring}
                         pointsPerMatch={snapshot.tournament.pointsPerMatch}
                         isAdmin={isAdmin && !finished}
                         busy={busy}
@@ -264,6 +269,7 @@ export function TournamentBoard({
                 {doneMatches.length > 0 ? (
                   <MatchHistory
                     matches={doneMatches}
+                    scoring={scoring}
                     pointsPerMatch={snapshot.tournament.pointsPerMatch}
                     defaultOpen={finished}
                     isAdmin={isAdmin}
@@ -393,6 +399,7 @@ function FullRoundBoard({
           <MatchCard
             key={match.id}
             match={match}
+            scoring={toScoreSystem(snapshot.tournament.scoring)}
             pointsPerMatch={snapshot.tournament.pointsPerMatch}
             isAdmin={isAdmin}
             busy={busy}
@@ -401,7 +408,9 @@ function FullRoundBoard({
         ))}
       </div>
       <p className="text-xs text-muted-foreground">
-        Jadwal diisi 20 ronde ke depan. Geser untuk pindah ronde, lalu isi skor.
+        {snapshot.tournament.format === "mexicano"
+          ? "Ronde berikutnya disusun dari klasemen setelah semua skor ronde ini masuk."
+          : "Jadwal diisi 20 ronde ke depan. Geser untuk pindah ronde, lalu isi skor."}
       </p>
     </div>
   );
@@ -471,6 +480,7 @@ function EmptyMatches({ isAdmin }: { isAdmin: boolean }) {
 function AdminBar({
   courtCount,
   scheduleMode,
+  mexicano,
   pendingCount,
   scheduledCount,
   started,
@@ -484,6 +494,7 @@ function AdminBar({
 }: {
   courtCount: number;
   scheduleMode: string;
+  mexicano: boolean;
   pendingCount: number;
   scheduledCount: number;
   started: boolean;
@@ -500,7 +511,9 @@ function AdminBar({
   const startLabel = busy
     ? "Sebentar…"
     : scheduleReady
-      ? "Jadwal siap"
+      ? mexicano
+        ? "Ronde berjalan"
+        : "Jadwal siap"
       : started
         ? fullRound
           ? "Ronde berikutnya"
@@ -512,24 +525,26 @@ function AdminBar({
       <CardContent className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
           <p className="text-sm text-muted-foreground">{stats}</p>
-          {fullRound ? (
+          {fullRound && !mexicano ? (
             <p className="text-xs text-muted-foreground">
               Strip di bawah menampilkan 20 ronde setelah ronde yang sedang main.
             </p>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 rounded-lg border border-border/70 px-2 py-1">
-            <Switch
-              id="schedule-mode"
-              checked={fullRound}
-              disabled={busy}
-              onCheckedChange={(checked) => onScheduleMode(checked ? "full" : "continuous")}
-            />
-            <Label htmlFor="schedule-mode" className="text-sm font-normal">
-              Ronde penuh
-            </Label>
-          </div>
+          {mexicano ? null : (
+            <div className="flex items-center gap-2 rounded-lg border border-border/70 px-2 py-1">
+              <Switch
+                id="schedule-mode"
+                checked={fullRound}
+                disabled={busy}
+                onCheckedChange={(checked) => onScheduleMode(checked ? "full" : "continuous")}
+              />
+              <Label htmlFor="schedule-mode" className="text-sm font-normal">
+                Ronde penuh
+              </Label>
+            </div>
+          )}
           <div className="flex items-center gap-1 rounded-lg border border-border/70 px-2 py-1">
             <span className="pr-1 text-xs text-muted-foreground">Lapangan</span>
             <Button
@@ -609,25 +624,61 @@ function TeamRow({ names, score, winner }: { names: string; score: number | null
   );
 }
 
+type ScoreDraft = { a: number; b: number };
+
+function savedScore(match: ClientMatch): ScoreDraft | null {
+  if (match.teamAScore === null || match.teamBScore === null) return null;
+  return { a: match.teamAScore, b: match.teamBScore };
+}
+
+function ScoreButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`h-9 rounded-md border text-sm tabular-nums transition-colors ${
+        active
+          ? "border-primary bg-primary font-semibold text-primary-foreground"
+          : "border-border/60 hover:border-primary/50"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
 const MatchCard = memo(function MatchCard({
   match,
+  scoring,
   pointsPerMatch,
   isAdmin,
   busy,
   onSave,
 }: {
   match: ClientMatch;
+  scoring: ScoreSystem;
   pointsPerMatch: number;
   isAdmin: boolean;
   busy?: boolean;
   onSave: (teamAScore: number, teamBScore: number) => Promise<void> | void;
 }) {
   const [open, setOpen] = useState(false);
-  const [scoreA, setScoreA] = useState<number | null>(match.teamAScore);
+  const [draft, setDraft] = useState<ScoreDraft | null>(savedScore(match));
   const playing = match.status === "pending";
   const scheduled = match.status === "scheduled";
   const completed = match.status === "completed";
-  const scoreB = scoreA === null ? null : pointsPerMatch - scoreA;
+  const race = scoring === "tennis_race";
+  const unchanged = draft?.a === match.teamAScore && draft?.b === match.teamBScore;
+  const isPicked = (a: number, b: number) => draft?.a === a && draft?.b === b;
+  const below = Array.from({ length: pointsPerMatch }, (_, value) => value);
 
   return (
     <Card className={playing ? "border-primary/40" : completed ? "match-card-past" : undefined}>
@@ -666,7 +717,7 @@ const MatchCard = memo(function MatchCard({
               open={open}
               onOpenChange={(next) => {
                 setOpen(next);
-                if (next) setScoreA(match.teamAScore);
+                if (next) setDraft(savedScore(match));
               }}
             >
               <DialogContent>
@@ -675,41 +726,74 @@ const MatchCard = memo(function MatchCard({
                 </DialogHeader>
                 <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-xl bg-secondary/40 p-3 text-center">
                   <div>
-                    <p className="font-heading text-4xl tabular-nums">{scoreA ?? "–"}</p>
+                    <p className="font-heading text-4xl tabular-nums">{draft?.a ?? "–"}</p>
                     <p className="mt-1 text-xs text-muted-foreground">{namesOf(match.teamA)}</p>
                   </div>
                   <span className="text-xl text-muted-foreground">:</span>
                   <div>
-                    <p className="font-heading text-4xl tabular-nums">{scoreB ?? "–"}</p>
+                    <p className="font-heading text-4xl tabular-nums">{draft?.b ?? "–"}</p>
                     <p className="mt-1 text-xs text-muted-foreground">{namesOf(match.teamB)}</p>
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Ketuk skor {namesOf(match.teamA)} — sisanya otomatis.
-                </p>
-                <div className="grid grid-cols-7 gap-1.5">
-                  {Array.from({ length: pointsPerMatch + 1 }, (_, value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setScoreA(value)}
-                      className={`h-9 rounded-md border text-sm tabular-nums transition-colors ${
-                        scoreA === value
-                          ? "border-primary bg-primary font-semibold text-primary-foreground"
-                          : "border-border/60 hover:border-primary/50"
-                      }`}
-                    >
-                      {value}
-                    </button>
-                  ))}
-                </div>
+                {race ? (
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-muted-foreground">{namesOf(match.teamA)} menang</p>
+                      <div
+                        className="grid gap-1.5"
+                        style={{ gridTemplateColumns: `repeat(${pointsPerMatch}, minmax(0, 1fr))` }}
+                      >
+                        {below.map((value) => (
+                          <ScoreButton
+                            key={value}
+                            label={`${pointsPerMatch}–${value}`}
+                            active={isPicked(pointsPerMatch, value)}
+                            onClick={() => setDraft({ a: pointsPerMatch, b: value })}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-muted-foreground">{namesOf(match.teamB)} menang</p>
+                      <div
+                        className="grid gap-1.5"
+                        style={{ gridTemplateColumns: `repeat(${pointsPerMatch}, minmax(0, 1fr))` }}
+                      >
+                        {below.map((value) => (
+                          <ScoreButton
+                            key={value}
+                            label={`${value}–${pointsPerMatch}`}
+                            active={isPicked(value, pointsPerMatch)}
+                            onClick={() => setDraft({ a: value, b: pointsPerMatch })}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Ketuk skor {namesOf(match.teamA)} — sisanya otomatis.
+                    </p>
+                    <div className="grid grid-cols-7 gap-1.5">
+                      {[...below, pointsPerMatch].map((value) => (
+                        <ScoreButton
+                          key={value}
+                          label={String(value)}
+                          active={isPicked(value, pointsPerMatch - value)}
+                          onClick={() => setDraft({ a: value, b: pointsPerMatch - value })}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
                 <DialogFooter>
                   <Button
                     className="w-full"
-                    disabled={scoreA === null || busy || scoreA === match.teamAScore}
+                    disabled={draft === null || busy || unchanged}
                     onClick={async () => {
-                      if (scoreA === null) return;
-                      await onSave(scoreA, pointsPerMatch - scoreA);
+                      if (draft === null) return;
+                      await onSave(draft.a, draft.b);
                       setOpen(false);
                     }}
                   >
@@ -727,6 +811,7 @@ const MatchCard = memo(function MatchCard({
 
 function MatchHistory({
   matches,
+  scoring,
   pointsPerMatch,
   defaultOpen,
   isAdmin,
@@ -734,6 +819,7 @@ function MatchHistory({
   onSave,
 }: {
   matches: ClientMatch[];
+  scoring: ScoreSystem;
   pointsPerMatch: number;
   defaultOpen: boolean;
   isAdmin: boolean;
@@ -756,6 +842,7 @@ function MatchHistory({
             <MatchCard
               key={match.id}
               match={match}
+              scoring={scoring}
               pointsPerMatch={pointsPerMatch}
               isAdmin={isAdmin}
               busy={busy}

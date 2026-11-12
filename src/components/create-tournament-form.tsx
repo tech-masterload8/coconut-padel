@@ -4,6 +4,7 @@ import { useActionState, useMemo, useRef, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { cn } from "cn";
 import { createTournament, type ActionResult } from "@/lib/actions";
+import { SCORE_TARGETS } from "@/lib/scoring";
 import { PointAdjustmentInput } from "@/components/point-adjustment-input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,8 +14,18 @@ import { Switch } from "@/components/ui/switch";
 
 type PlayerDraft = { id: number; name: string; late: boolean; points: string };
 
+const selectClass =
+  "h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm dark:bg-input/30";
+
 export function CreateTournamentForm() {
-  const [fullRound, setFullRound] = useState(false);
+  const [format, setFormat] = useState<"americano" | "mexicano">("americano");
+  const [fullRoundChoice, setFullRoundChoice] = useState(false);
+  const [system, setSystem] = useState<"points" | "tennis">("points");
+  const [points, setPoints] = useState("24");
+  const [tennis, setTennis] = useState("tennis_total:5");
+  const mexicano = format === "mexicano";
+  const fullRound = mexicano || fullRoundChoice;
+  const [scoring, target] = system === "points" ? ["points", points] : tennis.split(":");
   const nextPlayerId = useRef(5);
   const [players, setPlayers] = useState<PlayerDraft[]>([
     { id: 1, name: "", late: false, points: "0" },
@@ -30,50 +41,116 @@ export function CreateTournamentForm() {
       <CardHeader>
         <CardTitle className="font-heading text-2xl">Buat turnamen</CardTitle>
         <CardDescription>
-          {fullRound
-            ? "Semua pemain ikut dari ronde pertama."
-            : "Tandai yang bakal telat — main bisa mulai duluan tanpa mereka."}
+          {mexicano
+            ? "Lawan disusun dari klasemen tiap ronde. Semua pemain ikut dari ronde pertama."
+            : fullRound
+              ? "Semua pemain ikut dari ronde pertama."
+              : "Tandai yang bakal telat — main bisa mulai duluan tanpa mereka."}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form action={formAction} className="space-y-6">
+          <input type="hidden" name="format" value={format} />
           <input type="hidden" name="scheduleMode" value={fullRound ? "full" : "continuous"} />
-          <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/10 p-3">
-            <Switch
-              id="fullRound"
-              checked={fullRound}
-              onCheckedChange={(checked) => {
-                setFullRound(checked);
-                if (checked) {
-                  setPlayers((current) => current.map((row) => ({ ...row, late: false })));
-                }
-              }}
-            />
-            <Label htmlFor="fullRound">Ronde penuh</Label>
+          <input type="hidden" name="scoring" value={scoring} />
+          <input type="hidden" name="pointsPerMatch" value={target} />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="format">Format</Label>
+              <select
+                id="format"
+                value={format}
+                className={selectClass}
+                onChange={(event) => {
+                  const next = event.target.value === "mexicano" ? "mexicano" : "americano";
+                  setFormat(next);
+                  if (next === "mexicano") {
+                    setPlayers((current) => current.map((row) => ({ ...row, late: false })));
+                  }
+                }}
+              >
+                <option value="americano">Americano</option>
+                <option value="mexicano">Mexicano</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 sm:self-end">
+              <Switch
+                id="fullRound"
+                checked={fullRound}
+                disabled={mexicano}
+                onCheckedChange={(checked) => {
+                  setFullRoundChoice(checked);
+                  if (checked) {
+                    setPlayers((current) => current.map((row) => ({ ...row, late: false })));
+                  }
+                }}
+              />
+              <Label htmlFor="fullRound">Ronde penuh</Label>
+            </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="name">Nama turnamen</Label>
               <Input id="name" name="name" required placeholder="Misalnya: Jumat Malam Binjai" />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="courtCount">Jumlah lapangan</Label>
               <Input id="courtCount" name="courtCount" type="number" min={1} max={12} defaultValue={2} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="pointsPerMatch">Poin per pertandingan</Label>
+              <Label htmlFor="scoreSystem">Sistem poin</Label>
               <select
-                id="pointsPerMatch"
-                name="pointsPerMatch"
-                defaultValue="24"
-                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm dark:bg-input/30"
+                id="scoreSystem"
+                value={system}
+                className={selectClass}
+                onChange={(event) => setSystem(event.target.value === "tennis" ? "tennis" : "points")}
               >
-                <option value="16">16 poin</option>
-                <option value="21">21 poin</option>
-                <option value="24">24 poin</option>
-                <option value="32">32 poin</option>
+                <option value="points">Poin Americano</option>
+                <option value="tennis">Tennis point</option>
               </select>
             </div>
+            {system === "points" ? (
+              <div className="space-y-2">
+                <Label htmlFor="scoreTarget">Poin per pertandingan</Label>
+                <select
+                  id="scoreTarget"
+                  value={points}
+                  className={selectClass}
+                  onChange={(event) => setPoints(event.target.value)}
+                >
+                  {SCORE_TARGETS.points.map((value) => (
+                    <option key={value} value={value}>
+                      {value} poin
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="scoreTarget">Game per pertandingan</Label>
+                <select
+                  id="scoreTarget"
+                  value={tennis}
+                  className={selectClass}
+                  onChange={(event) => setTennis(event.target.value)}
+                >
+                  <optgroup label="Total game">
+                    {SCORE_TARGETS.tennis_total.map((value) => (
+                      <option key={value} value={`tennis_total:${value}`}>
+                        Total {value}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Siapa duluan">
+                    {SCORE_TARGETS.tennis_race.map((value) => (
+                      <option key={value} value={`tennis_race:${value}`}>
+                        Race to {value}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+              </div>
+            )}
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="pin">PIN pengelola (4-6 digit)</Label>
               <Input id="pin" name="pin" inputMode="numeric" pattern="\d{4,6}" required placeholder="Misalnya 1234" />

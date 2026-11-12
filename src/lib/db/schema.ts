@@ -15,6 +15,8 @@ export const tournaments = pgTable("tournaments", {
   name: text("name").notNull(),
   courtCount: integer("court_count").notNull().default(1),
   pointsPerMatch: integer("points_per_match").notNull().default(24),
+  scoring: text("scoring").notNull().default("points"),
+  format: text("format").notNull().default("americano"),
   scheduleMode: text("schedule_mode").notNull().default("continuous"),
   status: text("status").notNull().default("setup"),
   adminPinHash: text("admin_pin_hash").notNull(),

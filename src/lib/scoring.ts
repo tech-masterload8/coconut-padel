@@ -71,10 +71,58 @@ export function parsePointAdjustment(value: string): number | null {
   return points;
 }
 
-export function isValidAmericanoScore(teamAScore: number, teamBScore: number, pointsPerMatch: number) {
+/**
+ * points: poin reli, kedua skor berjumlah sama dengan target.
+ * tennis_total: jumlah game tetap, kedua skor berjumlah sama dengan target.
+ * tennis_race: siapa duluan sampai target game.
+ */
+export const SCORE_SYSTEMS = ["points", "tennis_total", "tennis_race"] as const;
+export type ScoreSystem = (typeof SCORE_SYSTEMS)[number];
+
+export const SCORE_TARGETS: Record<ScoreSystem, readonly number[]> = {
+  points: [16, 21, 24, 32],
+  tennis_total: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  tennis_race: [3, 4, 5, 6],
+};
+
+export function parseScoreSystem(value: string): ScoreSystem | null {
+  return SCORE_SYSTEMS.includes(value as ScoreSystem) ? (value as ScoreSystem) : null;
+}
+
+/** Turnamen lama tidak punya kolom ini, jadi nilai asing dibaca sebagai poin reli. */
+export function toScoreSystem(value: string): ScoreSystem {
+  return parseScoreSystem(value) ?? "points";
+}
+
+export function isScoreTarget(system: ScoreSystem, target: number) {
+  return SCORE_TARGETS[system].includes(target);
+}
+
+export function isValidMatchScore(
+  teamAScore: number,
+  teamBScore: number,
+  system: ScoreSystem,
+  target: number,
+) {
   if (!Number.isInteger(teamAScore) || !Number.isInteger(teamBScore)) return false;
   if (teamAScore < 0 || teamBScore < 0) return false;
-  return teamAScore + teamBScore === pointsPerMatch;
+  if (system === "tennis_race") {
+    return Math.max(teamAScore, teamBScore) === target && Math.min(teamAScore, teamBScore) < target;
+  }
+  return teamAScore + teamBScore === target;
+}
+
+export function scoreLabel(system: ScoreSystem, target: number) {
+  if (system === "tennis_total") return `Tennis · total ${target}`;
+  if (system === "tennis_race") return `Tennis · race to ${target}`;
+  return `${target} poin`;
+}
+
+export function scoreRuleMessage(system: ScoreSystem, target: number) {
+  if (system === "tennis_race") {
+    return `Skor race to ${target}: pemenang ${target}, lawannya di bawah ${target}.`;
+  }
+  return `Skor harus total ${target}.`;
 }
 
 function isAdjustmentMap(

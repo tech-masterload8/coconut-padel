@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  generateMexicanoRound,
   generateRound,
   previewUpcomingRounds,
   roundToActivate,
@@ -9,13 +10,108 @@ import {
   statusesForBatch,
   type PastMatch,
 } from "./matchmaker";
-import { computeStandings, isValidAmericanoScore, parsePointAdjustment, sanitizePointDraft } from "./scoring";
+import {
+  computeStandings,
+  isScoreTarget,
+  isValidMatchScore,
+  parsePointAdjustment,
+  sanitizePointDraft,
+  scoreLabel,
+  toScoreSystem,
+} from "./scoring";
+
+describe("tennis point", () => {
+  it("total: kedua skor harus berjumlah sama dengan total game", () => {
+    expect(isValidMatchScore(3, 2, "tennis_total", 5)).toBe(true);
+    expect(isValidMatchScore(5, 0, "tennis_total", 5)).toBe(true);
+    expect(isValidMatchScore(2, 2, "tennis_total", 4)).toBe(true);
+    expect(isValidMatchScore(3, 3, "tennis_total", 5)).toBe(false);
+    expect(isValidMatchScore(6, -1, "tennis_total", 5)).toBe(false);
+  });
+
+  it("race: pemenang tepat di target dan lawannya di bawah target", () => {
+    expect(isValidMatchScore(4, 0, "tennis_race", 4)).toBe(true);
+    expect(isValidMatchScore(3, 4, "tennis_race", 4)).toBe(true);
+    expect(isValidMatchScore(4, 4, "tennis_race", 4)).toBe(false);
+    expect(isValidMatchScore(3, 2, "tennis_race", 4)).toBe(false);
+    expect(isValidMatchScore(5, 2, "tennis_race", 4)).toBe(false);
+  });
+
+  it("hanya menerima pilihan yang ditawarkan", () => {
+    expect(isScoreTarget("tennis_total", 5)).toBe(true);
+    expect(isScoreTarget("tennis_total", 2)).toBe(false);
+    expect(isScoreTarget("tennis_race", 6)).toBe(true);
+    expect(isScoreTarget("tennis_race", 7)).toBe(false);
+    expect(isScoreTarget("points", 5)).toBe(false);
+  });
+
+  it("turnamen lama tanpa sistem poin dibaca sebagai poin Americano", () => {
+    expect(toScoreSystem("")).toBe("points");
+    expect(scoreLabel("points", 24)).toBe("24 poin");
+    expect(scoreLabel("tennis_total", 5)).toBe("Tennis · total 5");
+    expect(scoreLabel("tennis_race", 4)).toBe("Tennis · race to 4");
+  });
+});
+
+describe("mexicano", () => {
+  const roster = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({ id: `p${index + 1}`, present: true }));
+  const ranksInOrder = (count: number) =>
+    new Map(Array.from({ length: count }, (_, index) => [`p${index + 1}`, index + 1] as const));
+
+  it("mengisi lapangan urut klasemen, 1 & 4 lawan 2 & 3", () => {
+    const round = generateMexicanoRound({
+      players: roster(8),
+      courtCount: 2,
+      pastMatches: [],
+      ranks: ranksInOrder(8),
+      roundNumber: 2,
+    });
+
+    expect(round.matches).toEqual([
+      { court: 1, teamA: ["p1", "p4"], teamB: ["p2", "p3"] },
+      { court: 2, teamA: ["p5", "p8"], teamB: ["p6", "p7"] },
+    ]);
+    expect(round.sittingOut).toEqual([]);
+  });
+
+  it("yang paling sedikit main didahulukan, sisanya duduk", () => {
+    const pastMatches: PastMatch[] = [{ teamA: ["p1", "p2"], teamB: ["p3", "p4"] }];
+    const round = generateMexicanoRound({
+      players: roster(5),
+      courtCount: 1,
+      pastMatches,
+      ranks: ranksInOrder(5),
+      roundNumber: 2,
+    });
+
+    const playing = round.matches.flatMap((match) => [...match.teamA, ...match.teamB]);
+    expect(playing).toContain("p5");
+    expect(round.sittingOut).toHaveLength(1);
+    expect(round.sittingOut[0]).not.toBe("p5");
+  });
+
+  it("ronde pertama tetap terisi walau semua peringkat sama", () => {
+    const round = generateMexicanoRound({
+      players: roster(9),
+      courtCount: 2,
+      pastMatches: [],
+      ranks: new Map(),
+      roundNumber: 1,
+    });
+
+    const playing = round.matches.flatMap((match) => [...match.teamA, ...match.teamB]);
+    expect(round.matches).toHaveLength(2);
+    expect(new Set(playing).size).toBe(8);
+    expect(round.sittingOut).toHaveLength(1);
+  });
+});
 
 describe("americano scoring", () => {
   it("menerima skor yang jumlahnya sama dengan poin pertandingan", () => {
-    expect(isValidAmericanoScore(16, 8, 24)).toBe(true);
-    expect(isValidAmericanoScore(12, 12, 24)).toBe(true);
-    expect(isValidAmericanoScore(17, 8, 24)).toBe(false);
+    expect(isValidMatchScore(16, 8, "points", 24)).toBe(true);
+    expect(isValidMatchScore(12, 12, "points", 24)).toBe(true);
+    expect(isValidMatchScore(17, 8, "points", 24)).toBe(false);
   });
 
   it("membagi poin tim ke setiap pemain lalu merangking seperti PDLUP", () => {

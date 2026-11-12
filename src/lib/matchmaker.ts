@@ -325,6 +325,49 @@ export function generateRound(input: {
   return planMatches(present, courtsThisRound, matchesPlayed, partners, opponents, input.roundNumber);
 }
 
+export type TournamentFormat = "americano" | "mexicano";
+
+export function parseFormat(value: string): TournamentFormat | null {
+  return value === "americano" || value === "mexicano" ? value : null;
+}
+
+/**
+ * Mexicano: lapangan 1 diisi peringkat 1-4, lapangan 2 peringkat 5-8, dst.
+ * Di tiap lapangan, peringkat teratas dan terbawah melawan dua yang di tengah.
+ * Yang paling sedikit main tetap didahulukan agar giliran duduk bergilir.
+ * Peringkat yang sama (termasuk ronde pertama) diundi.
+ */
+export function generateMexicanoRound(input: {
+  players: PlayerRef[];
+  courtCount: number;
+  pastMatches: PastMatch[];
+  ranks: ReadonlyMap<string, number>;
+  roundNumber: number;
+}): GeneratedRound {
+  const present = input.players.filter((player) => player.present).map((player) => player.id);
+  const courts = Math.min(input.courtCount, Math.floor(present.length / 4));
+  if (courts < 1) return { matches: [], sittingOut: present };
+
+  const { matchesPlayed } = buildHistory(input.pastMatches);
+  const played = (id: string) => matchesPlayed.get(id) ?? 0;
+  const rank = (id: string) => input.ranks.get(id) ?? Number.MAX_SAFE_INTEGER;
+  const draw = (a: string, b: string) => hashTie(a, input.roundNumber) - hashTie(b, input.roundNumber);
+
+  const playing = [...present]
+    .sort((a, b) => played(a) - played(b) || draw(a, b))
+    .slice(0, courts * 4);
+  const seeded = [...playing].sort((a, b) => rank(a) - rank(b) || draw(a, b));
+
+  const matches: GeneratedMatch[] = [];
+  for (let court = 0; court < courts; court += 1) {
+    const [first, second, third, fourth] = seeded.slice(court * 4, court * 4 + 4);
+    matches.push({ court: court + 1, teamA: [first, fourth], teamB: [second, third] });
+  }
+
+  const busy = new Set(playing);
+  return { matches, sittingOut: present.filter((id) => !busy.has(id)) };
+}
+
 /** Ronde terjadwal yang dijaga di depan ronde yang sedang dimainkan. */
 export const UPCOMING_ROUND_TARGET = 20;
 
